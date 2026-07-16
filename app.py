@@ -2,11 +2,15 @@
 
 运行：.venv/bin/python app.py  →  浏览器自动打开 http://127.0.0.1:5000
 """
+import logging
 import os
 import threading
 import webbrowser
 
 from flask import Flask, jsonify, render_template, request, send_from_directory
+
+# 前端每 2 秒轮询一次任务状态，默认的访问日志会刷屏——只保留报错
+logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
 import db
 import downloader
