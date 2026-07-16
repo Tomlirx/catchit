@@ -1,0 +1,15 @@
+# 登录态（含 cookie，绝不能提交）
+ig_state.json
+
+# 运行数据与下载的视频
+data/
+videos/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# macOS
+.DS_Store

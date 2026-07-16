@@ -1,0 +1,4 @@
+flask
+playwright
+yt-dlp
+requests
