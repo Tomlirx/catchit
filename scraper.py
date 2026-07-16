@@ -198,6 +198,19 @@ def _fetch_tag_api(context, tag, found):
     return added if added > 0 else None
 
 
+def _fetch_user_api(context, username, found):
+    """博主近期作品 API。成功返回新增条数，失败返回 None（调用方回退到主页滚动）。"""
+    data = _fetch_json(
+        context,
+        "https://www.instagram.com/api/v1/feed/user/%s/username/?count=30" % username)
+    if not data:
+        return None
+    before = len(found)
+    _walk(data, found)
+    added = len(found) - before
+    return added if added > 0 else None
+
+
 def _fetch_detail(context, code):
     """单条视频详情：补齐列表页缺失的点赞/播放/发布时间。"""
     data = _fetch_json(
@@ -264,10 +277,26 @@ def run_scrape(task, channel):
                 fallback_tags.append(tag)
             page.wait_for_timeout(800)
 
-        # 2) 滚动来源：Reels 流 + Explore + API 失败的标签页
-        scrolls_list = scroll_sources + [
-            ("https://www.instagram.com/explore/tags/%s/" % t, settings["scrolls"])
-            for t in fallback_tags]
+        # 2) 频道配置的博主：优先走作品流 API，失败回退到主页 Reels 滚动
+        fallback_accounts = []
+        accounts = channel.get("accounts", [])
+        for i, acc in enumerate(accounts):
+            if task.cancel_event.is_set():
+                cancelled = True
+                break
+            task.message = "频道「%s」博主 @%s（%d/%d）" % (
+                channel["name"], acc, i + 1, len(accounts))
+            task.progress = {"found": len(found)}
+            if _fetch_user_api(context, acc, found) is None:
+                fallback_accounts.append(acc)
+            page.wait_for_timeout(800)
+
+        # 3) 滚动来源：Reels 流 + Explore + API 失败的标签页/博主主页
+        scrolls_list = (scroll_sources
+                        + [("https://www.instagram.com/explore/tags/%s/" % t,
+                            settings["scrolls"]) for t in fallback_tags]
+                        + [("https://www.instagram.com/%s/reels/" % a,
+                            settings["scrolls"]) for a in fallback_accounts])
         for i, (src, n_scrolls) in enumerate(scrolls_list):
             if task.cancel_event.is_set():
                 cancelled = True
@@ -287,7 +316,7 @@ def run_scrape(task, channel):
             except Exception:
                 continue  # 某个来源失败不影响其它来源
 
-        # 3) 过滤 + 补抓：最近 N 天、库中没有、热度达标；字段缺失的补抓详情再判定。
+        # 4) 过滤 + 补抓：最近 N 天、库中没有、热度达标；字段缺失的补抓详情再判定。
         #    门槛不达标宁缺毋滥，不凑数。
         cutoff = (datetime.now() - timedelta(days=settings["days"])).timestamp()
         min_likes = settings.get("min_likes", 0)

@@ -153,7 +153,8 @@ def api_channels():
     name = (data.get("name") or "").strip()
     if not name:
         return jsonify({"ok": False, "error": "频道名不能为空"}), 400
-    cid = db.upsert_channel(name, data.get("hashtags", []), data.get("id"))
+    cid = db.upsert_channel(name, data.get("hashtags", []),
+                            data.get("accounts", []), data.get("id"))
     return jsonify({"ok": True, "id": cid})
 
 

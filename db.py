@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS channels (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
     name     TEXT UNIQUE NOT NULL,
     hashtags TEXT NOT NULL DEFAULT '[]',
+    accounts TEXT NOT NULL DEFAULT '[]',
     enabled  INTEGER DEFAULT 1
 );
 CREATE TABLE IF NOT EXISTS settings (
@@ -74,6 +75,7 @@ def conn():
         _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         _conn.row_factory = sqlite3.Row
         _conn.executescript(SCHEMA)
+        _migrate_schema()
         _init_defaults()
         _migrate_v1()
     return _conn
@@ -84,6 +86,14 @@ def _exec(sql, params=()):
         cur = conn().execute(sql, params)
         conn().commit()
         return cur
+
+
+def _migrate_schema():
+    """给老库补新增的列。"""
+    cols = [r[1] for r in _conn.execute("PRAGMA table_info(channels)")]
+    if "accounts" not in cols:
+        _conn.execute("ALTER TABLE channels ADD COLUMN accounts TEXT NOT NULL DEFAULT '[]'")
+        _conn.commit()
 
 
 def _init_defaults():
@@ -167,18 +177,29 @@ def set_settings(updates):
 def list_channels():
     rows = conn().execute("SELECT * FROM channels ORDER BY id").fetchall()
     return [{"id": r["id"], "name": r["name"],
-             "hashtags": json.loads(r["hashtags"]), "enabled": r["enabled"]}
+             "hashtags": json.loads(r["hashtags"]),
+             "accounts": json.loads(r["accounts"]), "enabled": r["enabled"]}
             for r in rows]
 
 
-def upsert_channel(name, hashtags, channel_id=None):
+def _clean_username(s):
+    """接受 @name、name 或 instagram.com/name 链接，统一成用户名。"""
+    s = s.strip().lstrip("@")
+    m = re.search(r"instagram\.com/([A-Za-z0-9._]+)", s)
+    if m:
+        s = m.group(1)
+    return s if re.fullmatch(r"[A-Za-z0-9._]+", s) else ""
+
+
+def upsert_channel(name, hashtags, accounts=None, channel_id=None):
     tags = json.dumps([t.strip().lstrip("#") for t in hashtags if t.strip()])
+    accs = json.dumps([u for u in map(_clean_username, accounts or []) if u])
     if channel_id:
-        _exec("UPDATE channels SET name=?, hashtags=? WHERE id=?",
-              (name, tags, channel_id))
+        _exec("UPDATE channels SET name=?, hashtags=?, accounts=? WHERE id=?",
+              (name, tags, accs, channel_id))
         return channel_id
-    return _exec("INSERT INTO channels (name, hashtags) VALUES (?, ?)",
-                 (name, tags)).lastrowid
+    return _exec("INSERT INTO channels (name, hashtags, accounts) VALUES (?, ?, ?)",
+                 (name, tags, accs)).lastrowid
 
 
 def delete_channel(channel_id):

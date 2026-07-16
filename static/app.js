@@ -300,11 +300,17 @@ async function renderSettings() {
   channels = chs;
 
   const channelRows = chs.map(c => `
-    <div class="channel-row" data-id="${c.id}">
-      <input class="ch-name" value="${esc(c.name)}">
-      <input class="ch-tags" value="${esc(c.hashtags.join(", "))}" placeholder="标签，逗号分隔">
-      <button class="ghost ch-save">保存</button>
-      <button class="ghost ch-del">删除</button>
+    <div class="channel-block" data-id="${c.id}">
+      <div class="channel-row">
+        <input class="ch-name" value="${esc(c.name)}">
+        <input class="ch-tags" value="${esc(c.hashtags.join(", "))}" placeholder="标签，逗号分隔">
+        <button class="ghost ch-save">保存</button>
+        <button class="ghost ch-del">删除</button>
+      </div>
+      <div class="channel-row">
+        <input class="ch-accounts" value="${esc((c.accounts || []).join(", "))}"
+               placeholder="👤 博主用户名，逗号分隔（可选），如：natgeowild, bbcearth——直接抓他们的近期视频">
+      </div>
     </div>`).join("");
 
   $("#view").innerHTML = `<div class="settings">
@@ -322,8 +328,12 @@ async function renderSettings() {
         <input class="ch-tags" id="new-ch-tags" placeholder="标签，逗号分隔，如：cats, dogs, pets">
         <button class="ghost" id="new-ch-add">＋ 添加</button>
       </div>
-      <p class="hint">抓取时按频道采集：来源 = Reels 流 + Explore 页 + 该频道的每个标签页。
-      标签建议用英文（Instagram 标签页），4～6 个为宜。</p>
+      <div class="channel-row">
+        <input class="ch-accounts" id="new-ch-accounts"
+               placeholder="👤 博主用户名，逗号分隔（可选），支持 @名字 或主页链接">
+      </div>
+      <p class="hint">抓取来源 = Reels 流 + Explore 页 + 每个标签的热门帖 + 每个博主的近期作品。
+      标签用英文，4～10 个为宜；博主填知名账号的用户名（主页网址里的那段），他们的视频质量有保障。</p>
     </section>
     <section>
       <h2>抓取参数</h2>
@@ -348,12 +358,13 @@ async function renderSettings() {
     const r = await post("/api/login");
     toast(r.ok ? "浏览器已打开，请在窗口中登录" : r.error);
   };
-  $$(".channel-row[data-id]").forEach(row => {
+  $$(".channel-block[data-id]").forEach(row => {
     const id = parseInt(row.dataset.id);
     $(".ch-save", row).onclick = async () => {
       const r = await post("/api/channels", {
         id, name: $(".ch-name", row).value,
         hashtags: $(".ch-tags", row).value.split(","),
+        accounts: $(".ch-accounts", row).value.split(","),
       });
       toast(r.ok ? "频道已保存" : r.error);
       if (r.ok) loadChannels();
@@ -369,6 +380,7 @@ async function renderSettings() {
     const r = await post("/api/channels", {
       name: $("#new-ch-name").value,
       hashtags: $("#new-ch-tags").value.split(","),
+      accounts: $("#new-ch-accounts").value.split(","),
     });
     toast(r.ok ? "频道已添加" : r.error);
     if (r.ok) { render(); loadChannels(); }
