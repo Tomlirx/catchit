@@ -334,7 +334,7 @@ async function renderSettings() {
         <label>热度门槛：点赞 ≥ <input id="p-minlikes" type="number" min="0" step="1000" value="${settings.min_likes}" style="width:90px"></label>
         <button id="p-save" class="primary">保存参数</button>
       </div>
-      <p class="hint">低于热度门槛的视频不入库（宁缺毋滥；点赞被作者隐藏时，播放量达到门槛的 20 倍也算通过）。
+      <p class="hint">低于热度门槛的视频不入库，宁缺毋滥（点赞被作者隐藏、显示为 0 时，播放量达到门槛的 20 倍才算通过）。
       滚动次数越多采集越全，但耗时越长、账号风险略高。</p>
     </section>
     <section>
