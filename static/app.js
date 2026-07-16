@@ -342,6 +342,7 @@ async function renderSettings() {
         <label>每次入库上限 <input id="p-top" type="number" min="5" max="200" value="${settings.top_n}"> 条</label>
         <label>每页滚动 <input id="p-scrolls" type="number" min="3" max="40" value="${settings.scrolls}"> 次</label>
         <label>热度门槛：点赞 ≥ <input id="p-minlikes" type="number" min="0" step="1000" value="${settings.min_likes}" style="width:90px"></label>
+        <label><input id="p-follow" type="checkbox" ${settings.follow_feed ? "checked" : ""}> 扫描我的关注流</label>
         <button id="p-save" class="primary">保存参数</button>
       </div>
       <p class="hint">低于热度门槛的视频不入库，宁缺毋滥（点赞被作者隐藏、显示为 0 时，播放量达到门槛的 20 倍才算通过）。
@@ -389,6 +390,7 @@ async function renderSettings() {
     await post("/api/settings", {
       days: $("#p-days").value, top_n: $("#p-top").value,
       scrolls: $("#p-scrolls").value, min_likes: $("#p-minlikes").value,
+      follow_feed: $("#p-follow").checked ? 1 : 0,
     });
     toast("参数已保存");
   };

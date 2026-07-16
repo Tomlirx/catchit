@@ -232,6 +232,11 @@ def run_scrape(task, channel):
         ("https://www.instagram.com/reels/", settings["scrolls"] * 2),
         ("https://www.instagram.com/explore/", settings["scrolls"]),
     ]
+    if settings.get("follow_feed"):
+        # 首页「关注」流：内容全部来自用户关注的账号、按时间排列，
+        # 一个来源即可覆盖整个关注列表的近期发布
+        scroll_sources.insert(
+            0, ("https://www.instagram.com/?variant=following", settings["scrolls"]))
     known = db.known_codes()
     found = {}
 
