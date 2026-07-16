@@ -3,56 +3,41 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CatchIt — Instagram 每周热门视频</title>
+  <title>CatchIt — Instagram 热门视频搬运工作台</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
   <header>
-    <h1>🎬 CatchIt</h1>
-    <p class="sub">Instagram 最近一周热门视频 Top 50{% if result_date %}（抓取于 {{ result_date }}）{% endif %}</p>
-    <div class="toolbar">
-      <button id="btn-scrape" class="primary">🔍 抓取最新热门</button>
-      <label class="select-all"><input type="checkbox" id="chk-all"> 全选</label>
-      <button id="btn-download" class="primary" disabled>⬇️ 下载所选（<span id="sel-count">0</span>）</button>
+    <div class="row top-row">
+      <h1>🎬 CatchIt</h1>
+      <nav id="nav">
+        <button data-view="discover" class="active">发现 <span id="cnt-discover" class="badge">0</span></button>
+        <button data-view="library">素材库 <span id="cnt-library" class="badge">0</span></button>
+        <button data-view="failed">失败 <span id="cnt-failed" class="badge">0</span></button>
+        <button data-view="settings">设置</button>
+      </nav>
+      <span id="login-indicator" class="login-indicator">…</span>
     </div>
-    <div id="status" class="status hidden"></div>
+    <div class="row action-row">
+      <div class="paste-box">
+        <input id="url-input" type="text"
+               placeholder="粘贴 Instagram 视频链接（可一次多条），回车直接下载入库">
+        <button id="btn-add-urls" class="primary">解析下载</button>
+      </div>
+      <div class="scrape-box">
+        <select id="scrape-channel"></select>
+        <button id="btn-scrape" class="primary">🔍 抓取热门</button>
+      </div>
+    </div>
+    <div id="task-bar" class="task-bar hidden">
+      <span id="task-msg"></span>
+      <button id="btn-cancel" class="ghost">取消</button>
+    </div>
+    <div id="toast" class="toast hidden"></div>
   </header>
 
-  <main>
-    {% if not videos %}
-      <div class="empty">还没有抓取结果。点击「抓取最新热门」开始——首次运行会弹出浏览器窗口，请手动登录 Instagram。</div>
-    {% endif %}
-    <div class="grid">
-      {% for v in videos %}
-      <div class="card" data-code="{{ v.code }}">
-        <label class="thumb-wrap">
-          <input type="checkbox" class="chk" value="{{ v.code }}">
-          {% if v.thumb %}
-            <img class="thumb" src="{{ v.thumb }}" alt="" loading="lazy">
-          {% else %}
-            <div class="thumb placeholder">🎞️</div>
-          {% endif %}
-          <span class="rank">#{{ loop.index }}</span>
-          <span class="dl-badge hidden"></span>
-        </label>
-        <div class="info">
-          <div class="title" title="{{ v.caption }}">{{ v.title }}</div>
-          <div class="desc">{{ v.caption[:160] }}{% if v.caption|length > 160 %}…{% endif %}</div>
-          <div class="meta">
-            <span>❤️ {{ "{:,}".format(v.likes) }}</span>
-            <span>💬 {{ "{:,}".format(v.comments) }}</span>
-            {% if v.plays %}<span>▶️ {{ "{:,}".format(v.plays) }}</span>{% endif %}
-          </div>
-          <div class="meta small">
-            <span>@{{ v.author }}</span>
-            <span>{{ v.taken_at_str }}</span>
-            <a href="{{ v.url }}" target="_blank" rel="noopener">原帖 ↗</a>
-          </div>
-        </div>
-      </div>
-      {% endfor %}
-    </div>
-  </main>
+  <main id="view"></main>
+
   <script src="/static/app.js"></script>
 </body>
 </html>

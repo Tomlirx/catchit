@@ -1,9 +1,8 @@
-"""用 Playwright 登录 Instagram，抓取最近一周的热门视频。
+"""用 Playwright 登录 Instagram，按频道抓取最近一周的热门视频。
 
-策略：Instagram 没有公开的"每周热门榜"接口，这里从多个来源采集
-（Reels 流、Explore 页、若干热门标签页），拦截页面加载时的
-GraphQL / api/v1 JSON 响应解析出视频数据，再在本地按互动量
-（点赞 + 评论 + 播放）排序取 top N。
+策略：Instagram 没有公开的"热门榜"接口，从多个来源采集（Reels 流、
+Explore 页、频道配置的标签页），拦截页面加载时的 GraphQL / api/v1
+JSON 响应解析视频数据，本地按互动量排序取 top N 入库。
 """
 import json
 import os
@@ -13,23 +12,69 @@ from datetime import datetime, timedelta
 
 from playwright.sync_api import sync_playwright
 
-import storage
+import db
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATE_PATH = os.path.join(BASE_DIR, "ig_state.json")
+LOGIN_TIMEOUT = 300  # 等待用户手动登录的秒数
 
-# 可按需调整的参数
-TOP_N = 50
-DAYS = 7                     # 只保留最近 N 天发布的视频
-SCROLLS_PER_PAGE = 12        # 每个来源页向下滚动的次数
-HASHTAGS = ["reels", "viral", "trending", "explore"]  # 采集的热门标签
-LOGIN_TIMEOUT = 300          # 等待用户手动登录的秒数
 
-SOURCES = (
-    ["https://www.instagram.com/reels/", "https://www.instagram.com/explore/"]
-    + ["https://www.instagram.com/explore/tags/%s/" % t for t in HASHTAGS]
-)
+# ---------- 登录 ----------
 
+def login_status():
+    """不打开浏览器的快速检查：本地是否存有未过期的会话 cookie。"""
+    if not os.path.exists(STATE_PATH):
+        return {"logged_in": False, "detail": "尚未登录"}
+    try:
+        with open(STATE_PATH, encoding="utf-8") as f:
+            state = json.load(f)
+        for c in state.get("cookies", []):
+            if c.get("name") == "sessionid" and c.get("value"):
+                exp = c.get("expires") or 0
+                if exp and exp < time.time():
+                    return {"logged_in": False, "detail": "登录已过期，请重新登录"}
+                return {"logged_in": True,
+                        "detail": "已保存登录会话（若抓取失败请重新登录）"}
+    except Exception:
+        pass
+    return {"logged_in": False, "detail": "尚未登录"}
+
+
+def _has_session(context):
+    return any(c["name"] == "sessionid" and c["value"]
+               for c in context.cookies("https://www.instagram.com"))
+
+
+def run_login(task):
+    """独立的登录任务：弹出浏览器让用户手动登录，保存会话后关闭。"""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=False)
+        ctx_args = {"viewport": {"width": 1100, "height": 800}, "locale": "en-US"}
+        if os.path.exists(STATE_PATH):
+            ctx_args["storage_state"] = STATE_PATH
+        context = browser.new_context(**ctx_args)
+        page = context.new_page()
+        task.message = "已打开浏览器，请在窗口中登录 Instagram（工具不读取密码）…"
+        page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
+        deadline = time.time() + LOGIN_TIMEOUT
+        ok = False
+        while time.time() < deadline and not task.cancel_event.is_set():
+            if _has_session(context):
+                ok = True
+                break
+            time.sleep(2)
+        if ok:
+            time.sleep(3)  # 等登录后的跳转稳定
+            context.storage_state(path=STATE_PATH)
+            task.message = "登录成功，会话已保存。"
+        elif task.cancel_event.is_set():
+            task.message = "登录已取消。"
+        else:
+            task.error = "等待登录超时（%d 秒）。" % LOGIN_TIMEOUT
+        browser.close()
+
+
+# ---------- 数据解析（与页面响应的两种 JSON 形状对应） ----------
 
 def _first(*vals):
     for v in vals:
@@ -56,19 +101,17 @@ def _normalize_api_item(item):
     code = item.get("code")
     if not code:
         return None
-    caption = _dig(item, "caption", "text") or ""
-    thumb = _dig(item, "image_versions2", "candidates", 0, "url")
     return {
         "code": code,
         "url": "https://www.instagram.com/reel/%s/" % code,
-        "caption": caption,
+        "caption": _dig(item, "caption", "text") or "",
         "author": _dig(item, "user", "username") or _dig(item, "owner", "username") or "",
         "likes": max(item.get("like_count") or 0, 0),
         "comments": max(item.get("comment_count") or 0, 0),
         "plays": max(_first(item.get("play_count"), item.get("ig_play_count"),
                             item.get("view_count"), 0) or 0, 0),
         "taken_at": item.get("taken_at") or 0,
-        "thumb_url": thumb,
+        "thumb_url": _dig(item, "image_versions2", "candidates", 0, "url"),
     }
 
 
@@ -79,11 +122,10 @@ def _normalize_gql_node(node):
     code = node.get("shortcode")
     if not code:
         return None
-    caption = _dig(node, "edge_media_to_caption", "edges", 0, "node", "text") or ""
     return {
         "code": code,
         "url": "https://www.instagram.com/reel/%s/" % code,
-        "caption": caption,
+        "caption": _dig(node, "edge_media_to_caption", "edges", 0, "node", "text") or "",
         "author": _dig(node, "owner", "username") or "",
         "likes": max(_first(_dig(node, "edge_media_preview_like", "count"),
                             _dig(node, "edge_liked_by", "count"), 0) or 0, 0),
@@ -118,114 +160,95 @@ def _score(v):
     return v["likes"] + 3 * v["comments"] + 0.01 * v["plays"]
 
 
-def _wait_for_login(page, context, report):
-    """检测登录态；未登录则等用户在弹出的浏览器里手动登录。"""
-    def logged_in():
-        return any(c["name"] == "sessionid" and c["value"]
-                   for c in context.cookies("https://www.instagram.com"))
+# ---------- 抓取任务 ----------
 
-    if logged_in():
-        return True
-    report("waiting_login", "请在弹出的浏览器窗口中登录 Instagram（工具不会读取你的密码）…")
-    deadline = time.time() + LOGIN_TIMEOUT
-    while time.time() < deadline:
-        if logged_in():
-            time.sleep(3)  # 等登录后的跳转稳定
-            return True
-        time.sleep(2)
-    return False
-
-
-def run_scrape(report=None):
-    """执行一次抓取。report(stage, message, videos_found=0) 用于回报进度。
-
-    返回 (videos, error)：videos 为写入结果文件的 top N 列表。
-    """
-    def _report(stage, message, count=0):
-        if report:
-            report(stage, message, count)
-
-    seen = storage.load_seen()
+def run_scrape(task, channel):
+    """抓取一个频道（由 TaskManager 调度）。channel 为 db.list_channels() 的一项。"""
+    settings = db.get_settings()
+    sources = (["https://www.instagram.com/reels/", "https://www.instagram.com/explore/"]
+               + ["https://www.instagram.com/explore/tags/%s/" % t
+                  for t in channel["hashtags"]])
+    known = db.known_codes()
     found = {}
 
     def on_response(resp):
-        url = resp.url
-        if "/api/v1/" not in url and "/graphql" not in url:
+        if "/api/v1/" not in resp.url and "/graphql" not in resp.url:
             return
         try:
-            ct = resp.headers.get("content-type", "")
-            if "json" not in ct:
-                return
-            _walk(resp.json(), found)
+            if "json" in resp.headers.get("content-type", ""):
+                _walk(resp.json(), found)
         except Exception:
             pass
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
-        ctx_args = {
-            "viewport": {"width": 1280, "height": 900},
-            "locale": "en-US",
-        }
+        ctx_args = {"viewport": {"width": 1280, "height": 900}, "locale": "en-US"}
         if os.path.exists(STATE_PATH):
             ctx_args["storage_state"] = STATE_PATH
         context = browser.new_context(**ctx_args)
         page = context.new_page()
         page.on("response", on_response)
 
-        _report("login", "打开 Instagram，检查登录状态…")
+        task.message = "打开 Instagram，检查登录状态…"
         page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
-        if not _wait_for_login(page, context, _report):
+        page.wait_for_timeout(3000)
+        if not _has_session(context):
             browser.close()
-            return [], "等待登录超时（%d 秒内未检测到登录）。请重试。" % LOGIN_TIMEOUT
+            task.error = "未登录或登录已失效，请先到「设置」页登录 Instagram。"
+            return
         context.storage_state(path=STATE_PATH)
 
-        for i, src in enumerate(SOURCES):
-            _report("scraping", "采集来源 %d/%d：%s" % (i + 1, len(SOURCES), src),
-                    len(found))
+        cancelled = False
+        for i, src in enumerate(sources):
+            if task.cancel_event.is_set():
+                cancelled = True
+                break
+            task.message = "频道「%s」采集来源 %d/%d" % (channel["name"], i + 1, len(sources))
+            task.progress = {"found": len(found)}
             try:
                 page.goto(src, wait_until="domcontentloaded", timeout=30000)
                 page.wait_for_timeout(2500)
-                for _ in range(SCROLLS_PER_PAGE):
+                for _ in range(settings["scrolls"]):
+                    if task.cancel_event.is_set():
+                        cancelled = True
+                        break
                     page.mouse.wheel(0, 2200)
                     page.wait_for_timeout(1500)
-                    _report("scraping",
-                            "采集来源 %d/%d：%s" % (i + 1, len(SOURCES), src),
-                            len(found))
+                    task.progress = {"found": len(found)}
             except Exception:
                 continue  # 某个来源失败不影响其它来源
 
-        # 过滤：最近 N 天、未出现在历史记录里
-        cutoff = (datetime.now() - timedelta(days=DAYS)).timestamp()
+        # 过滤：最近 N 天、库中没有的，按互动分取 top N
+        cutoff = (datetime.now() - timedelta(days=settings["days"])).timestamp()
         fresh = [v for v in found.values()
-                 if v["taken_at"] >= cutoff and v["code"] not in seen]
+                 if v["taken_at"] >= cutoff and v["code"] not in known]
         fresh.sort(key=_score, reverse=True)
-        top = fresh[:TOP_N]
+        top = fresh[:settings["top_n"]]
 
-        # 下载封面图（用浏览器会话请求，避免 CDN 防盗链）
-        _report("thumbs", "保存 %d 个视频的封面图…" % len(top), len(found))
+        task.message = "保存 %d 条新视频的封面…" % len(top)
         for v in top:
             v["thumb"] = ""
-            if not v.get("thumb_url"):
-                continue
-            try:
-                r = context.request.get(v["thumb_url"], timeout=15000)
-                if r.ok:
-                    path = os.path.join(storage.THUMBS_DIR, v["code"] + ".jpg")
-                    with open(path, "wb") as f:
-                        f.write(r.body())
-                    v["thumb"] = "/thumbs/%s.jpg" % v["code"]
-            except Exception:
-                pass
+            if v.get("thumb_url"):
+                try:
+                    r = context.request.get(v["thumb_url"], timeout=15000)
+                    if r.ok:
+                        path = os.path.join(db.THUMBS_DIR, v["code"] + ".jpg")
+                        with open(path, "wb") as f:
+                            f.write(r.body())
+                        v["thumb"] = "/thumbs/%s.jpg" % v["code"]
+                except Exception:
+                    pass
             v.pop("thumb_url", None)
-
         browser.close()
 
     for v in top:
         cap = (v["caption"] or "").strip()
         v["title"] = re.split(r"[\n\r]", cap, 1)[0][:120] if cap else "(无标题)"
-        v["taken_at_str"] = datetime.fromtimestamp(v["taken_at"]).strftime("%Y-%m-%d %H:%M")
+        v["score"] = _score(v)
+        db.insert_video(v, source="scrape", channel_id=channel["id"])
 
-    storage.save_results(top)
-    storage.add_seen([v["code"] for v in top])
-    _report("done", "抓取完成，共 %d 条新视频。" % len(top), len(found))
-    return top, None
+    if cancelled:
+        task.message = "抓取已取消，已入库 %d 条新视频。" % len(top)
+    else:
+        task.message = "抓取完成：共发现 %d 条，入库 %d 条新视频。" % (len(found), len(top))
+    task.progress = {"found": len(found), "added": len(top)}
