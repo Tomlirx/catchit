@@ -16,9 +16,10 @@ _lock = threading.Lock()
 _conn = None
 
 DEFAULT_SETTINGS = {
-    "days": 7,          # 只保留最近 N 天发布的视频
+    "days": 10,         # 只保留最近 N 天发布的视频
     "top_n": 50,        # 每次抓取入库的条数上限
     "scrolls": 12,      # 每个来源页滚动次数
+    "min_likes": 10000, # 热度门槛：低于此点赞数不入库（播放量达到 20 倍门槛也算过）
 }
 
 SCHEMA = """
@@ -223,8 +224,12 @@ def list_videos(view="discover", channel_id=None, pub_filter=None, sort="score")
         where.append("(pub_xhs=0 OR pub_douyin=0)")
     elif pub_filter == "published":
         where.append("(pub_xhs=1 AND pub_douyin=1)")
-    order = {"score": "score DESC", "likes": "likes DESC",
-             "time": "taken_at DESC", "added": "created_at DESC"}.get(sort, "score DESC")
+    order = {
+        "score": "score DESC", "likes": "likes DESC",
+        "time": "taken_at DESC", "added": "created_at DESC",
+        # 日增热度：互动分 / 发布至今的天数（不足半天按半天算），发现正在上升的视频
+        "velocity": "(score / MAX((strftime('%s','now') - taken_at) / 86400.0, 0.5)) DESC",
+    }.get(sort, "score DESC")
     rows = conn().execute(
         "SELECT * FROM videos WHERE %s ORDER BY %s" % (" AND ".join(where), order),
         params).fetchall()

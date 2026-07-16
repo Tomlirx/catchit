@@ -218,10 +218,13 @@ def run_scrape(task, channel):
             except Exception:
                 continue  # 某个来源失败不影响其它来源
 
-        # 过滤：最近 N 天、库中没有的，按互动分取 top N
+        # 过滤：最近 N 天、库中没有、热度达标（点赞可能被作者隐藏，播放量够高也算过），
+        # 再按互动分取 top N——门槛不达标宁缺毋滥，不凑数
         cutoff = (datetime.now() - timedelta(days=settings["days"])).timestamp()
+        min_likes = settings.get("min_likes", 0)
         fresh = [v for v in found.values()
-                 if v["taken_at"] >= cutoff and v["code"] not in known]
+                 if v["taken_at"] >= cutoff and v["code"] not in known
+                 and (v["likes"] >= min_likes or v["plays"] >= min_likes * 20)]
         fresh.sort(key=_score, reverse=True)
         top = fresh[:settings["top_n"]]
 

@@ -172,6 +172,7 @@ async function renderVideos(view) {
     `<select id="f-channel"><option value="">全部频道</option>${channelOptions(filters.channel)}</select>`,
     `<select id="f-sort">
        <option value="score" ${filters.sort === "score" ? "selected" : ""}>按热度</option>
+       <option value="velocity" ${filters.sort === "velocity" ? "selected" : ""}>按日增热度 🔥</option>
        <option value="likes" ${filters.sort === "likes" ? "selected" : ""}>按点赞</option>
        <option value="time" ${filters.sort === "time" ? "selected" : ""}>按发布时间</option>
        <option value="added" ${filters.sort === "added" ? "selected" : ""}>按入库时间</option>
@@ -330,9 +331,11 @@ async function renderSettings() {
         <label>最近 <input id="p-days" type="number" min="1" max="30" value="${settings.days}"> 天</label>
         <label>每次入库上限 <input id="p-top" type="number" min="5" max="200" value="${settings.top_n}"> 条</label>
         <label>每页滚动 <input id="p-scrolls" type="number" min="3" max="40" value="${settings.scrolls}"> 次</label>
+        <label>热度门槛：点赞 ≥ <input id="p-minlikes" type="number" min="0" step="1000" value="${settings.min_likes}" style="width:90px"></label>
         <button id="p-save" class="primary">保存参数</button>
       </div>
-      <p class="hint">滚动次数越多采集越全，但耗时越长、账号风险略高。</p>
+      <p class="hint">低于热度门槛的视频不入库（宁缺毋滥；点赞被作者隐藏时，播放量达到门槛的 20 倍也算通过）。
+      滚动次数越多采集越全，但耗时越长、账号风险略高。</p>
     </section>
     <section>
       <h2>版权提醒</h2>
@@ -373,7 +376,7 @@ async function renderSettings() {
   $("#p-save").onclick = async () => {
     await post("/api/settings", {
       days: $("#p-days").value, top_n: $("#p-top").value,
-      scrolls: $("#p-scrolls").value,
+      scrolls: $("#p-scrolls").value, min_likes: $("#p-minlikes").value,
     });
     toast("参数已保存");
   };
